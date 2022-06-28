@@ -9,6 +9,9 @@ deep-head-pose
 EvalImages
 cache*
 *.pkl
+*.jpeg
+*.jpg
+*.txt
 gif
 archive
 *.ply
@@ -27,5 +30,5 @@ stylegan3/results
 eg3d/results
 eg3d_results
 
-dataset_preprocessing/ffhq/FFHQ
+dataset_preprocessing/ffhq
 dataset_preprocessing/drive
