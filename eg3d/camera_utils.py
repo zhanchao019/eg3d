@@ -16,6 +16,7 @@ import math
 
 import torch
 import torch.nn as nn
+import numpy as np
 
 from training.volumetric_rendering import math_utils
 
@@ -64,6 +65,25 @@ class LookAtPoseSampler:
     For a camera pose looking at the origin with the camera at position [0, 0, 1]:
     cam2world = LookAtPoseSampler.sample(math.pi/2, math.pi/2, torch.tensor([0, 0, 0]), radius=1)
     """
+    @staticmethod
+    def similarity_transform(angles, t3d,radius):
+        ''' similarity transform. dof = 7.
+        3D: s*R.dot(X) + t
+        Homo: M = [[sR, t],[0^T, 1]].  M.dot(X)
+        Args:(float32)
+            vertices: [nver, 3]. 
+            s: [1,]. scale factor.
+            R: [3,3]. rotation matrix.
+            t3d: [3,]. 3d translation vector.
+        Returns:
+            transformed vertices: [nver, 3]
+        '''
+        R=angle2matrix(angles)
+        last=np.array([0,0,0,1])
+        tmp=np.insert(R,3,t3d,axis=1)*radius
+        tmp=np.insert(tmp,3,last,axis=0)
+            
+        return tmp
 
     @staticmethod
     def sample(horizontal_mean, vertical_mean, lookat_position, horizontal_stddev=0, vertical_stddev=0, radius=1, batch_size=1, device='cpu'):
@@ -147,3 +167,31 @@ def FOV_to_intrinsics(fov_degrees, device='cpu'):
     focal_length = float(1 / (math.tan(fov_degrees * 3.14159 / 360) * 1.414))
     intrinsics = torch.tensor([[focal_length, 0, 0.5], [0, focal_length, 0.5], [0, 0, 1]], device=device)
     return intrinsics
+
+def angle2matrix(angles):
+    ''' get rotation matrix from three rotation angles(degree). right-handed.
+    Args:
+        angles: [3,]. x, y, z angles
+        x: pitch. positive for looking down.
+        y: yaw. positive for looking left. 
+        z: roll. positive for tilting head right. 
+    Returns:
+        R: [3, 3]. rotation matrix.
+    '''
+    x, y, z = np.deg2rad(angles[0]), np.deg2rad(angles[1]), np.deg2rad(angles[2])
+    # x
+    Rx=np.array([[1,      0,       0],
+                 [0, math.cos(x),  -math.sin(x)],
+                 [0, math.sin(x),   math.cos(x)]])
+    # y
+    Ry=np.array([[ math.cos(y), 0, math.sin(y)],
+                 [      0, 1,      0],
+                 [-math.sin(y), 0, math.cos(y)]])
+    # z
+    Rz=np.array([[math.cos(z), -math.sin(z), 0],
+                 [math.sin(z),  math.cos(z), 0],
+                 [     0,       0, 1]])
+    
+    R=Rz.dot(Ry.dot(Rx))
+    return R.astype(np.float32)
+

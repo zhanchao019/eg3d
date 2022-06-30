@@ -21,6 +21,7 @@ temp/
 shapes/
 imgs/
 vids/
+res/
 *.mp4
 
 stylegan3/results

@@ -22,13 +22,15 @@ import torch
 from tqdm import tqdm
 import mrcfile
 
-
 import legacy
 from camera_utils import LookAtPoseSampler, FOV_to_intrinsics
 from torch_utils import misc
 from training.triplane import TriPlaneGenerator
 
 
+def get_data_path(root='examples'):
+    im_path = [os.path.join(root, i) for i in sorted(os.listdir(root)) if i.endswith('npy') ]
+    return im_path
 #----------------------------------------------------------------------------
 
 def parse_range(s: Union[str, List]) -> List[int]:
@@ -109,17 +111,19 @@ def create_samples(N=256, voxel_origin=[0, 0, 0], cube_length=2.0):
 @click.option('--trunc-cutoff', 'truncation_cutoff', type=int, help='Truncation cutoff', default=14, show_default=True)
 @click.option('--class', 'class_idx', type=int, help='Class label (unconditional if not specified)')
 @click.option('--outdir', help='Where to save the output images', type=str, required=True, metavar='DIR')
+@click.option('--poseindir', help='Where to save the input images pose', type=str, required=False, metavar='DIR')
 @click.option('--shapes', help='Export shapes as .mrc files viewable in ChimeraX', type=bool, required=False, metavar='BOOL', default=False, show_default=True)
 @click.option('--shape-res', help='', type=int, required=False, metavar='int', default=512, show_default=True)
 @click.option('--fov-deg', help='Field of View of camera in degrees', type=int, required=False, metavar='float', default=18.837, show_default=True)
 @click.option('--shape-format', help='Shape Format', type=click.Choice(['.mrc', '.ply']), default='.mrc')
-@click.option('--reload_modules', help='Overload persistent modules?', type=bool, required=False, metavar='BOOL', default=False, show_default=True)
+@click.option('--reload_modules', help='Overload persistent modules?', type=bool, required=False, metavar='BOOL', default=True, show_default=True)#使用代码更改
 def generate_images(
     network_pkl: str,
     seeds: List[int],
     truncation_psi: float,
     truncation_cutoff: int,
     outdir: str,
+    poseindir: str,
     shapes: bool,
     shape_res: int,
     fov_deg: float,
@@ -152,35 +156,49 @@ def generate_images(
         G = G_new
 
     os.makedirs(outdir, exist_ok=True)
-
+    poselist=get_data_path(poseindir)
     cam2world_pose = LookAtPoseSampler.sample(3.14/2, 3.14/2, torch.tensor([0, 0, 0.2], device=device), radius=2.7, device=device)
     intrinsics = FOV_to_intrinsics(fov_deg, device=device)
-
+    idx=0
     # Generate images.
-    for seed_idx, seed in enumerate(seeds):
-        print('Generating image for seed %d (%d/%d) ...' % (seed, seed_idx, len(seeds)))
-        z = torch.from_numpy(np.random.RandomState(seed).randn(1, G.z_dim)).to(device)
+    for  pose in tqdm(poselist):
+        posedetail=np.load(pose,allow_pickle=True).item()
+        #print('Generating image for pose %d (%d/%d) ...' % (pose, idx, len(poselist)))
+        
+        z = torch.from_numpy(np.random.RandomState(1).randn(1, G.z_dim)).to(device)
 
         imgs = []
-        angle_p = -0.2
-        for angle_y, angle_p in [(.4, angle_p), (0, angle_p), (-.4, angle_p)]:
-            cam_pivot = torch.tensor(G.rendering_kwargs.get('avg_camera_pivot', [0, 0, 0]), device=device)
-            cam_radius = G.rendering_kwargs.get('avg_camera_radius', 2.7)
-            cam2world_pose = LookAtPoseSampler.sample(np.pi/2 + angle_y, np.pi/2 + angle_p, cam_pivot, radius=cam_radius, device=device)
-            conditioning_cam2world_pose = LookAtPoseSampler.sample(np.pi/2, np.pi/2, cam_pivot, radius=cam_radius, device=device)
-            camera_params = torch.cat([cam2world_pose.reshape(-1, 16), intrinsics.reshape(-1, 9)], 1)
-            conditioning_params = torch.cat([conditioning_cam2world_pose.reshape(-1, 16), intrinsics.reshape(-1, 9)], 1)
+        angle_p,angle_y = 0.0,0.0 # generate with center angle
+        cam_pivot = torch.tensor( [0, 0, 0], device=device)
+        cam_radius = G.rendering_kwargs.get('avg_camera_radius', 2.7)
+        cam2world_pose = LookAtPoseSampler.sample(np.pi/2 + angle_y, np.pi/2 + angle_p, cam_pivot, radius=cam_radius, device=device)
+        conditioning_cam2world_pose = LookAtPoseSampler.sample(np.pi/2, np.pi/2, cam_pivot, radius=cam_radius, device=device)
+        conditioning_params = torch.cat([conditioning_cam2world_pose.reshape(-1, 16), intrinsics.reshape(-1, 9)], 1)
+        
+        #给nerf模块使用
+        
+        render_angle_y,render_angle_p = 0.0,0.0 # generate with center angle
 
-            ws = G.mapping(z, conditioning_params, truncation_psi=truncation_psi, truncation_cutoff=truncation_cutoff)
-            img = G.synthesis(ws, camera_params)['image']
+        render_angle_y, render_angle_p= -posedetail['angle'][0][0],-posedetail['angle'][0][2]#get x z pose
+        #cam_pivot_iter=torch.tensor(posedetail['trans'][0].tolist(),device=device)
+        #cam2world_pose_render_tmp = LookAtPoseSampler.similarity_transform(posedetail['angle'][0],posedetail['trans'][0],radius=cam_radius)
+        cam2world_pose_render = LookAtPoseSampler.sample(np.pi/2 + render_angle_y, np.pi/2 + render_angle_p, cam_pivot, radius=cam_radius, device=device)
+        #cam2world_pose_render=LookAtPoseSampler.create_cam2world_matrix(torch.tensor(posedetail['angle'],device=device), torch.tensor(posedetail['trans'],device=device))
+        camera_params = torch.cat([torch.tensor(cam2world_pose_render.reshape(-1, 16),device=device), torch.tensor(intrinsics.reshape(-1, 9),device=device)], 1)
 
-            img = (img.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8)
-            imgs.append(img)
+        
+
+        ws = G.mapping(z, conditioning_params, truncation_psi=truncation_psi, truncation_cutoff=truncation_cutoff)#0角度传入 gan maping
+        render=G.synthesis(ws, camera_params,use_cached_backbone=True,cache_backbone=True)
+        img = render['image']
+
+        img = (img.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8)
+        imgs.append(img)
 
         img = torch.cat(imgs, dim=2)
 
-        PIL.Image.fromarray(img[0].cpu().numpy(), 'RGB').save(f'{outdir}/seed{seed:04d}.png')
-
+        PIL.Image.fromarray(img[0].cpu().numpy(), 'RGB').save(f'{outdir}/{idx:04d}.png')
+        idx=idx+1
         if shapes:
             # extract a shape.mrc with marching cubes. You can view the .mrc file using ChimeraX from UCSF.
             max_batch=1000000
@@ -216,9 +234,9 @@ def generate_images(
 
             if shape_format == '.ply':
                 from shape_utils import convert_sdf_samples_to_ply
-                convert_sdf_samples_to_ply(np.transpose(sigmas, (2, 1, 0)), [0, 0, 0], 1, os.path.join(outdir, f'seed{seed:04d}.ply'), level=10)
+                convert_sdf_samples_to_ply(np.transpose(sigmas, (2, 1, 0)), [0, 0, 0], 1, os.path.join(outdir, f'seed{pose:04d}.ply'), level=10)
             elif shape_format == '.mrc': # output mrc
-                with mrcfile.new_mmap(os.path.join(outdir, f'seed{seed:04d}.mrc'), overwrite=True, shape=sigmas.shape, mrc_mode=2) as mrc:
+                with mrcfile.new_mmap(os.path.join(outdir, f'seed{pose:04d}.mrc'), overwrite=True, shape=sigmas.shape, mrc_mode=2) as mrc:
                     mrc.data[:] = sigmas
 
 
