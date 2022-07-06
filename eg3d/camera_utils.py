@@ -66,26 +66,6 @@ class LookAtPoseSampler:
     cam2world = LookAtPoseSampler.sample(math.pi/2, math.pi/2, torch.tensor([0, 0, 0]), radius=1)
     """
     @staticmethod
-    def similarity_transform(angles, t3d,radius):
-        ''' similarity transform. dof = 7.
-        3D: s*R.dot(X) + t
-        Homo: M = [[sR, t],[0^T, 1]].  M.dot(X)
-        Args:(float32)
-            vertices: [nver, 3]. 
-            s: [1,]. scale factor.
-            R: [3,3]. rotation matrix.
-            t3d: [3,]. 3d translation vector.
-        Returns:
-            transformed vertices: [nver, 3]
-        '''
-        R=angle2matrix(angles)
-        last=np.array([0,0,0,1])
-        tmp=np.insert(R,3,t3d,axis=1)*radius
-        tmp=np.insert(tmp,3,last,axis=0)
-            
-        return tmp
-
-    @staticmethod
     def sample(horizontal_mean, vertical_mean, lookat_position, horizontal_stddev=0, vertical_stddev=0, radius=1, batch_size=1, device='cpu'):
         h = torch.randn((batch_size, 1), device=device) * horizontal_stddev + horizontal_mean
         v = torch.randn((batch_size, 1), device=device) * vertical_stddev + vertical_mean
@@ -103,6 +83,19 @@ class LookAtPoseSampler:
 
         # forward_vectors = math_utils.normalize_vecs(-camera_origins)
         forward_vectors = math_utils.normalize_vecs(lookat_position - camera_origins)
+        return create_cam2world_matrix(forward_vectors, camera_origins)
+
+    @staticmethod
+    def fixsample(direction, lookat_position, horizontal_stddev=0, vertical_stddev=0, radius=1, batch_size=1, device='cpu'):
+
+        camera_origins = torch.zeros((batch_size, 3), device=device)
+        direction=torch.tensor(direction)
+        camera_origins[:, 0:1] = direction[0]
+        camera_origins[:, 2:3] = direction[1]
+        camera_origins[:, 1:2] = direction[2]
+
+        # forward_vectors = math_utils.normalize_vecs(-camera_origins)
+        forward_vectors = math_utils.normalize_vecs( -camera_origins)
         return create_cam2world_matrix(forward_vectors, camera_origins)
 
 class UniformCameraPoseSampler:
@@ -155,6 +148,90 @@ def create_cam2world_matrix(forward_vector, origin):
     cam2world = (translation_matrix @ rotation_matrix)[:, :, :]
     assert(cam2world.shape[1:] == (4, 4))
     return cam2world
+
+def create_fix_cam2world_matrix(angles):
+    """
+    Takes in the direction the camera is pointing and the camera origin and returns a cam2world matrix.
+    Works on batches of forward_vectors, origins. Assumes y-axis is up and that there is no camera roll.
+    """
+
+    rotation_matrix = torch.eye(4, device=origin.device).unsqueeze(0).repeat(forward_vector.shape[0], 1, 1)
+    rotation_matrix[:, :3, :3] = Camera_angle(angles)
+
+    translation_matrix = torch.eye(4, device=origin.device).unsqueeze(0).repeat(forward_vector.shape[0], 1, 1)
+    translation_matrix[:, :3, 3] = origin
+    cam2world = (translation_matrix @ rotation_matrix)[:, :, :]
+    assert(cam2world.shape[1:] == (4, 4))
+    return cam2world
+
+
+def Camera_angle(angles):
+    '''
+    move camera in 3D
+    '''
+    angels=torch.tensor(angles)
+    batch_size= 1
+    ones = torch.ones([batch_size,1],device='cpu')
+    zeros=torch.zeros([batch_size,1],device='cpu')
+    x,y,z=torch.tensor(angles[:,:1]),torch.tensor(angles[:,1:2]),torch.tensor(angles[:,2:])
+
+    rot_x=torch.cat([ones,zeros,zeros,
+                     zeros,torch.cos(x),-torch.sin(x),
+                     zeros,torch.sin(x),torch.cos(x)
+                     ],dim=1).reshape([batch_size,3,3])
+
+    rot_y=torch.cat([
+        torch.cos(y),zeros,torch.sin(y),
+        zeros,ones,zeros,
+        -torch.sin(y),zeros,torch.cos(y)
+        ],dim=1).reshape([batch_size,3,3])
+
+    rot_z = torch.cat([
+        torch.cos(z), -torch.sin(z), zeros,
+        torch.sin(z), torch.cos(z), zeros, 
+        zeros, zeros, ones
+        ], dim=1). reshape([batch_size, 3, 3])
+
+    rot=rot_z@rot_y@rot_x#@矩阵乘法
+    return rot.permute(0,2,1)
+
+def compute_rotation(angles):
+    x, y, z = angles
+    rot_x = np.array([
+        [1, 0, 0],
+        [0, np.cos(x), -np.sin(x)],
+        [0, np.sin(x), np.cos(x)]
+    ])
+    rot_y = np.array([
+        [np.cos(y), 0, np.sin(y)],
+        [0, 1, 0],
+        [-np.sin(y), 0, np.cos(y)]
+    ])
+    rot_z = np.array([
+        [np.cos(z), -np.sin(z), 0],
+        [np.sin(z), np.cos(z), 0],
+        [0, 0, 1]
+    ])
+    return np.matmul(rot_z, np.matmul(rot_y, rot_x))
+
+
+'''
+euler angles and translation are estimated from deep3dfacerecon_pytorch
+'''
+def Get_extrinsics_from_euler_and_translation(euler:np.ndarray, trans:np.ndarray):
+    theta_x, theta_y, theta_z = euler[0], euler[1], euler[2]
+    theta_x = np.pi - theta_x
+    theta_y = -theta_y
+    theta_z = theta_z 
+    rot_mat = compute_rotation([theta_x, theta_y, theta_z])
+    trans_x = -trans[0]
+    trans_y = trans[1]
+    trans_z = np.sqrt(2.7 ** 2 - trans_x ** 2 - trans_y ** 2)
+    trans_new = np.matmul(rot_mat, np.array([trans_x, trans_y, trans_z]))
+    mat_4x4 = np.eye(4)
+    mat_4x4[0:3, 0:3] = rot_mat
+    mat_4x4[0:3, 3] = -trans_new
+    return mat_4x4
 
 
 def FOV_to_intrinsics(fov_degrees, device='cpu'):

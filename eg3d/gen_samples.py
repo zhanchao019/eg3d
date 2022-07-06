@@ -9,7 +9,7 @@
 # its affiliates is strictly prohibited.
 
 """Generate images and shapes using pretrained network pickle."""
-
+#ffmpeg -r 10 -f image2 -i %04d.png withTrans.mp4
 import os
 import re
 from typing import List, Optional, Tuple, Union
@@ -23,7 +23,7 @@ from tqdm import tqdm
 import mrcfile
 
 import legacy
-from camera_utils import LookAtPoseSampler, FOV_to_intrinsics
+from camera_utils import LookAtPoseSampler, FOV_to_intrinsics,Camera_angle,Get_extrinsics_from_euler_and_translation
 from torch_utils import misc
 from training.triplane import TriPlaneGenerator
 
@@ -182,11 +182,13 @@ def generate_images(
         render_angle_y, render_angle_p= -posedetail['angle'][0][0],-posedetail['angle'][0][2]#get x z pose
         #cam_pivot_iter=torch.tensor(posedetail['trans'][0].tolist(),device=device)
         #cam2world_pose_render_tmp = LookAtPoseSampler.similarity_transform(posedetail['angle'][0],posedetail['trans'][0],radius=cam_radius)
-        cam2world_pose_render = LookAtPoseSampler.sample(np.pi/2 + render_angle_y, np.pi/2 + render_angle_p, cam_pivot, radius=cam_radius, device=device)
-        #cam2world_pose_render=LookAtPoseSampler.create_cam2world_matrix(torch.tensor(posedetail['angle'],device=device), torch.tensor(posedetail['trans'],device=device))
+        #cam2world_pose_render = LookAtPoseSampler.fixsample(posedetail['angle'][0], cam_pivot, radius=cam_radius, device=device)
+        #zeroTrans=np.array([0,0,0],dtype=np.float32)
+        cam2world_pose_render=np.float32(Get_extrinsics_from_euler_and_translation(posedetail['angle'][0],posedetail['trans'][0]))
         camera_params = torch.cat([torch.tensor(cam2world_pose_render.reshape(-1, 16),device=device), torch.tensor(intrinsics.reshape(-1, 9),device=device)], 1)
 
         
+        #tmp=Camera_angle(angles=torch.tensor(posedetail['angle']))
 
         ws = G.mapping(z, conditioning_params, truncation_psi=truncation_psi, truncation_cutoff=truncation_cutoff)#0角度传入 gan maping
         render=G.synthesis(ws, camera_params,use_cached_backbone=True,cache_backbone=True)
