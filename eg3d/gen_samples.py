@@ -183,8 +183,10 @@ def generate_images(
         #cam_pivot_iter=torch.tensor(posedetail['trans'][0].tolist(),device=device)
         #cam2world_pose_render_tmp = LookAtPoseSampler.similarity_transform(posedetail['angle'][0],posedetail['trans'][0],radius=cam_radius)
         #cam2world_pose_render = LookAtPoseSampler.fixsample(posedetail['angle'][0], cam_pivot, radius=cam_radius, device=device)
-        #zeroTrans=np.array([0,0,0],dtype=np.float32)
-        cam2world_pose_render=np.float32(Get_extrinsics_from_euler_and_translation(posedetail['angle'][0],posedetail['trans'][0]))
+        zeroTrans=np.array([0,0,0],dtype=np.float32)
+        posedetail['angle'][0][2]=-posedetail['angle'][0][2]
+
+        cam2world_pose_render=np.float32(Get_extrinsics_from_euler_and_translation(posedetail['angle'][0],zeroTrans))
         camera_params = torch.cat([torch.tensor(cam2world_pose_render.reshape(-1, 16),device=device), torch.tensor(intrinsics.reshape(-1, 9),device=device)], 1)
 
         
